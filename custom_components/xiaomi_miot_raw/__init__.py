@@ -109,41 +109,35 @@ class GenericMiotDevice(Entity):
             self._skip_update = False
             return
 
-        response = []
-        success_count = 0
-        ex_count = 0
-        for k in self._mapping:
-            try:
-                resp = await self.hass.async_add_job(partial(self.get_property, k))
-                response = response + resp
-                success_count += 1
-            except DeviceException as ex:
-                _LOGGER.error("Got exception while fetching the state: %s", ex)
-                ex_count += 1
+        try:
+            _props = [k for k in self._mapping]
+            response = await self.hass.async_add_job(
+                self._device.get_properties_for_mapping
+            )
+            self._available = True
 
-        if success_count == ex_count:
-            self._assumed_state = False
-        else:
-            self._assumed_state = True
+            statedict = {}
+            count4004 = 0
+            for r in response:
+                if r['code'] == 0:
+                    try:
+                        f = self._ctrl_params[r['did']]['value_ratio']
+                        statedict[r['did']] = r['value'] * f
+                    except KeyError:
+                        statedict[r['did']] = r['value']
+                else:
+                    statedict[r['did']] = None
+                    if r['code'] == -4004:
+                        count4004 += 1
+            if count4004 == len(response):
+                self._assumed_state = True
+                # _LOGGER.warn("设备不支持状态反馈")
 
-        statedict = {}
-        count4004 = 0
-        for r in response:
-            if r['code'] == 0:
-                try:
-                    f = self._ctrl_params[r['did']]['value_ratio']
-                    statedict[r['did']] = r['value'] * f
-                except KeyError:
-                    statedict[r['did']] = r['value']
-            else:
-                statedict[r['did']] = None
-                if r['code'] == -4004:
-                    count4004 += 1
-        if count4004 == len(response):
-            self._assumed_state = True
-            # _LOGGER.warn("设备不支持状态反馈")
+            self._state_attrs.update(statedict)
 
-        self._state_attrs.update(statedict)
+        except DeviceException as ex:
+            self._available = False
+            _LOGGER.error("Got exception while fetching the state: %s", ex)
 
 
 class ToggleableMiotDevice(GenericMiotDevice, ToggleEntity):

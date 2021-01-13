@@ -187,8 +187,47 @@ class MiotCover(GenericMiotDevice, CoverEntity):
             self._skip_update = True
 
     async def async_update(self):
-        # TODO
-        await super().async_update()
+        """Fetch state from the device."""
+        # On state change some devices doesn't provide the new state immediately.
+        if self._update_instant is False and self._skip_update:
+            self._skip_update = False
+            return
+
+        response = []
+        success_count = 0
+        ex_count = 0
+        for k in self._mapping:
+            try:
+                resp = await self.hass.async_add_job(partial(self.get_property, k))
+                response = response + resp
+                success_count += 1
+            except DeviceException as ex:
+                _LOGGER.error("Got exception while fetching the state: %s", ex)
+                ex_count += 1
+
+        if success_count == ex_count:
+            self._assumed_state = False
+        else:
+            self._assumed_state = True
+
+        statedict = {}
+        count4004 = 0
+        for r in response:
+            if r['code'] == 0:
+                try:
+                    f = self._ctrl_params[r['did']]['value_ratio']
+                    statedict[r['did']] = r['value'] * f
+                except KeyError:
+                    statedict[r['did']] = r['value']
+            else:
+                statedict[r['did']] = None
+                if r['code'] == -4004:
+                    count4004 += 1
+        if count4004 == len(response):
+            self._assumed_state = True
+            # _LOGGER.warn("设备不支持状态反馈")
+
+        self._state_attrs.update(statedict)
 
         state = self._state_attrs['current_position']
         _LOGGER.debug("Got new state: %s", state)
